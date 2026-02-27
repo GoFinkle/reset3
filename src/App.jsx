@@ -84,6 +84,10 @@ export default function App() {
   };
 
   // ---------- state ----------
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [apiError, setApiError] = useState("");
+
   const [minutes, setMinutes] = useState(() => {
     const saved = localStorage.getItem("reset3_minutes");
     return saved ? Number(saved) : 60;
@@ -115,6 +119,10 @@ export default function App() {
     const saved = localStorage.getItem("reset3_weekly");
     return saved ? JSON.parse(saved) : { w1: "", w2: "", w3: "" };
   });
+
+  useEffect(() => {
+  localStorage.setItem("reset3_weekly", JSON.stringify(weekly));
+}, [weekly]);
 
   const [result, setResult] = useState(() => {
     const saved = localStorage.getItem("reset3_result");
@@ -215,63 +223,104 @@ export default function App() {
   };
 
   // ---------- v3: backend call (updates UI) ----------
-  const callBackendGenerate = async () => {
-    try {
-      const rawLines = Array.from(
-        new Set(input.split("\n").map((s) => s.trim()).filter(Boolean))
-      );
+  
+  // ---------- v3: backend call (updates UI) ----------
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
-      if (rawLines.length === 0) {
-        alert("Brain dump is empty. Add at least 3 lines.");
-        return;
-      }
+const callBackendGenerate = async () => {
+  setApiError("");
 
-      const response = await fetch("http://localhost:3001/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          brainDump: rawLines.map((t) => ({ text: t })),
-          minutes,
-          quickWinMode,
-          weekly,
-        }),
-      });
+  const rawLines = Array.from(
+    new Set(input.split("\n").map((s) => s.trim()).filter(Boolean))
+  );
 
-      const data = await response.json();
+  if (rawLines.length === 0) {
+    alert("Brain dump is empty. Add at least 3 lines.");
+    return;
+  }
 
-      const newResult = {
-        primary: data?.primary?.text || "Pick one meaningful win.",
-        primaryRaw: data?.primary?.text || "",
-        primaryReason:
-          data?.primary?.reason || reasonFor(data?.primary?.text),
-        primaryAvoidance: isAvoidance(data?.primary?.text),
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
 
-        support1: data?.support?.[0]?.text || "Clear one blocker.",
-        support1Raw: data?.support?.[0]?.text || "",
-        support1Reason:
-          data?.support?.[0]?.reason || reasonFor(data?.support?.[0]?.text),
-        support1Avoidance: isAvoidance(data?.support?.[0]?.text),
+  try {
+    setIsLoading(true);
 
-        support2: data?.support?.[1]?.text || "Do one quick cleanup.",
-        support2Raw: data?.support?.[1]?.text || "",
-        support2Reason:
-          data?.support?.[1]?.reason || reasonFor(data?.support?.[1]?.text),
-        support2Avoidance: isAvoidance(data?.support?.[1]?.text),
-      };
+console.log("CALLING BACKEND:", `${API_URL}/api/generate`);
 
-      setResult(newResult);
-      localStorage.setItem("reset3_result", JSON.stringify(newResult));
+    const response = await fetch(`${API_URL}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
 
-      const nextDaily = { ...dailyResults, [todayKey]: newResult };
-      setDailyResults(nextDaily);
-      localStorage.setItem("reset3_daily_results", JSON.stringify(nextDaily));
+body: JSON.stringify({
+  brainDump: rawLines.map((t) => ({ text: t })),
+  minutes,
+  quickWinMode,
+}),
 
-      setDone({ primary: false, support1: false, support2: false });
-    } catch (err) {
-      console.error("Backend call failed:", err);
-      alert("Backend call failed. Check server terminal + browser console.");
+    });
+
+    if (!response.ok) {
+      const msg = await response.text();
+      throw new Error(msg || `HTTP ${response.status}`);
     }
-  };
+
+    const data = await response.json();
+
+    const newResult = {
+      primary: data?.primary?.text || "Pick one meaningful win.",
+      primaryRaw: data?.primary?.text || "",
+      primaryReason: data?.primary?.reason || reasonFor(data?.primary?.text),
+      primaryAvoidance: isAvoidance(data?.primary?.text),
+
+      support1: data?.support?.[0]?.text || "Clear one blocker.",
+      support1Raw: data?.support?.[0]?.text || "",
+      support1Reason:
+        data?.support?.[0]?.reason || reasonFor(data?.support?.[0]?.text),
+      support1Avoidance: isAvoidance(data?.support?.[0]?.text),
+
+      support2: data?.support?.[1]?.text || "Do one quick cleanup.",
+      support2Raw: data?.support?.[1]?.text || "",
+      support2Reason:
+        data?.support?.[1]?.reason || reasonFor(data?.support?.[1]?.text),
+      support2Avoidance: isAvoidance(data?.support?.[1]?.text),
+    };
+
+    setResult(newResult);
+    setApiError(""); // clear any previous backend error
+    localStorage.setItem("reset3_result", JSON.stringify(newResult));
+
+    const nextDaily = { ...dailyResults, [todayKey]: newResult };
+    setDailyResults(nextDaily);
+    localStorage.setItem("reset3_daily_results", JSON.stringify(nextDaily));
+
+    setDone({ primary: false, support1: false, support2: false });
+
+} catch (err) {
+  console.error("Backend call failed:", err);
+
+  // Make the error human-readable
+  const isAbort =
+    err?.name === "AbortError" ||
+    String(err?.message || "").toLowerCase().includes("aborted");
+
+  const msg = isAbort
+    ? "Backend request timed out (60s). Try again."
+    : `Backend error: ${err?.message || "Unknown error"}`;
+
+  // Show the real error
+  setApiError(msg);
+
+  // Optional fallback (v2). Keep it, but make it honest.
+  setApiError((prev) => `${prev} (Using local fallback.)`);
+  handleGenerate();
+}
+
+finally {
+    clearTimeout(timeout);
+    setIsLoading(false);
+  }
+};
 
   // ---------- generator (v2 local) ----------
   const handleGenerate = () => {
@@ -581,18 +630,61 @@ export default function App() {
           />
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button onClick={completeCycleAndGenerateNext} style={btn("primary")}>
-              {result
-                ? done.primary
-                  ? "Generate Next Set"
-                  : "Primary First → Then Next Set"
-                : "Generate My 3"}
-            </button>
 
-            <button onClick={callBackendGenerate} style={btn("ghost")}>
-              Test Backend (v3)
+<button
+  onClick={() => {
+    // Enforce Primary-first rule
+    if (result && !done.primary) {
+      alert("Primary must be checked before generating the next set.");
+      return;
+    }
+
+    // If Primary is done, count cycle + prune completed
+    if (result && done.primary) {
+      removeCompletedFromDump(result, done);
+
+      const currentCount = cyclesByDay[todayKey] || 0;
+      const nextCycles = { ...cyclesByDay, [todayKey]: currentCount + 1 };
+      setCyclesByDay(nextCycles);
+      localStorage.setItem("reset3_cycles", JSON.stringify(nextCycles));
+    }
+
+    // ✅ v3 backend is now the main generator (with v2 fallback inside)
+    callBackendGenerate();
+  }}
+  style={btn("primary")}
+  disabled={isLoading}
+>
+  {isLoading
+    ? "Thinking..."
+    : result
+      ? done.primary
+        ? "Generate Next Set"
+        : "Primary First → Then Next Set"
+      : "Generate My 3"}
+</button>
+
+
+<button onClick={callBackendGenerate} style={btn("ghost")} disabled={isLoading}>
+
+            <button
+                onClick={callBackendGenerate}
+                disabled={isLoading}
+                style={{
+                  opacity: isLoading ? 0.6 : 1,
+                  cursor: isLoading ? "not-allowed" : "pointer",
+                }}
+              >
+                {isLoading ? "Thinking..." : "Test Backend (v3)"}
+              </button>
             </button>
           </div>
+
+{apiError && (
+  <div style={{ marginTop: 10, opacity: 0.9, fontSize: 13 }}>
+    ⚠ {apiError}
+  </div>
+)}
 
           {result && !done.primary && (
             <div style={{ marginTop: 10, opacity: 0.85, fontSize: 13 }}>
