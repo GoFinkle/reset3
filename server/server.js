@@ -13,20 +13,27 @@ const client = new OpenAI({ apiKey: API_KEY });
 
 const app = express();
 
-// ---- Basic logging ----
-console.log("SERVER START FILE:", __filename);
-console.log("OPENAI KEY LOADED:", !!API_KEY);
-console.log("OPENAI KEY PREFIX:", API_KEY.slice(0, 12));
-console.log("OPENAI KEY LENGTH:", API_KEY.length);
+
 
 // ---- Middleware ----
 // Allow localhost dev + (optional) your deployed domain later
+
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: ["http://localhost:5173"],
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("CORS blocked: " + origin));
+    },
     methods: ["GET", "POST", "OPTIONS"],
   })
 );
+
 app.use(express.json({ limit: "60kb" }));
 
 // ---- Routes ----
@@ -48,10 +55,12 @@ function withTimeout(promise, ms = 45000) {
 }
 
 app.post("/api/generate", async (req, res) => {
+
   console.log("HIT /api/generate", {
     hasBody: !!req.body,
     keys: Object.keys(req.body || {}),
-  });
+    hasWeekly: !!(req.body && req.body.weekly),
+      });
 
   try {
     const { brainDump = [], minutes = 60, quickWinMode = false, weekly = {} } =
