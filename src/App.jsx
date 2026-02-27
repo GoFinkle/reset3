@@ -221,11 +221,9 @@ export default function App() {
     // Generate next set (v2 local generator)
     handleGenerate();
   };
-
-  // ---------- v3: backend call (updates UI) ----------
   
   // ---------- v3: backend call (updates UI) ----------
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const API_URL = import.meta.env.VITE_API_URL;
 
 const callBackendGenerate = async () => {
   setApiError("");
@@ -256,6 +254,7 @@ body: JSON.stringify({
   brainDump: rawLines.map((t) => ({ text: t })),
   minutes,
   quickWinMode,
+  weekly,
 }),
 
     });
@@ -524,6 +523,7 @@ finally {
             <h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0.5 }}>
               Reset 3
             </h1>
+
             <p style={{ marginTop: 6, opacity: 0.85 }}>
               Unload everything. We’ll decide what matters.
             </p>
@@ -629,56 +629,48 @@ finally {
             style={{ ...inputStyle, height: 160 }}
           />
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+  <button
+    onClick={() => {
+      // Enforce Primary-first rule
+      if (result && !done.primary) {
+        alert("Primary must be checked before generating the next set.");
+        return;
+      }
 
-<button
-  onClick={() => {
-    // Enforce Primary-first rule
-    if (result && !done.primary) {
-      alert("Primary must be checked before generating the next set.");
-      return;
-    }
+      // If Primary is done, count cycle + prune completed
+      if (result && done.primary) {
+        removeCompletedFromDump(result, done);
 
-    // If Primary is done, count cycle + prune completed
-    if (result && done.primary) {
-      removeCompletedFromDump(result, done);
+        const currentCount = cyclesByDay[todayKey] || 0;
+        const nextCycles = { ...cyclesByDay, [todayKey]: currentCount + 1 };
+        setCyclesByDay(nextCycles);
+        localStorage.setItem("reset3_cycles", JSON.stringify(nextCycles));
+      }
 
-      const currentCount = cyclesByDay[todayKey] || 0;
-      const nextCycles = { ...cyclesByDay, [todayKey]: currentCount + 1 };
-      setCyclesByDay(nextCycles);
-      localStorage.setItem("reset3_cycles", JSON.stringify(nextCycles));
-    }
+      // Backend generator (v3), with v2 fallback inside
+      callBackendGenerate();
+    }}
+    style={btn("primary")}
+    disabled={isLoading}
+  >
+    {isLoading
+      ? "Thinking..."
+      : result
+        ? done.primary
+          ? "Generate Next Set"
+          : "Primary First → Then Next Set"
+        : "Generate My 3"}
+  </button>
 
-    // ✅ v3 backend is now the main generator (with v2 fallback inside)
-    callBackendGenerate();
-  }}
-  style={btn("primary")}
-  disabled={isLoading}
->
-  {isLoading
-    ? "Thinking..."
-    : result
-      ? done.primary
-        ? "Generate Next Set"
-        : "Primary First → Then Next Set"
-      : "Generate My 3"}
-</button>
-
-
-<button onClick={callBackendGenerate} style={btn("ghost")} disabled={isLoading}>
-
-            <button
-                onClick={callBackendGenerate}
-                disabled={isLoading}
-                style={{
-                  opacity: isLoading ? 0.6 : 1,
-                  cursor: isLoading ? "not-allowed" : "pointer",
-                }}
-              >
-                {isLoading ? "Thinking..." : "Test Backend (v3)"}
-              </button>
-            </button>
-          </div>
+  <button
+    onClick={callBackendGenerate}
+    style={btn("ghost")}
+    disabled={isLoading}
+  >
+    Test Backend
+  </button>
+</div>
 
 {apiError && (
   <div style={{ marginTop: 10, opacity: 0.9, fontSize: 13 }}>
