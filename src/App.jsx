@@ -71,9 +71,16 @@ export default function App() {
 
   const isAvoidance = (text) => {
     const t = (text || "").toLowerCase();
-    return ["pay", "bill", "rent", "tax", "invoice", "call", "email", "appointment"].some(
-      (k) => t.includes(k)
-    );
+    return [
+      "pay",
+      "bill",
+      "rent",
+      "tax",
+      "invoice",
+      "call",
+      "email",
+      "appointment",
+    ].some((k) => t.includes(k));
   };
 
   // ---------- state ----------
@@ -167,9 +174,12 @@ export default function App() {
     if (!currentResult) return;
 
     const completedRaw = [];
-    if (currentDone.primary && currentResult.primaryRaw) completedRaw.push(currentResult.primaryRaw.trim());
-    if (currentDone.support1 && currentResult.support1Raw) completedRaw.push(currentResult.support1Raw.trim());
-    if (currentDone.support2 && currentResult.support2Raw) completedRaw.push(currentResult.support2Raw.trim());
+    if (currentDone.primary && currentResult.primaryRaw)
+      completedRaw.push(currentResult.primaryRaw.trim());
+    if (currentDone.support1 && currentResult.support1Raw)
+      completedRaw.push(currentResult.support1Raw.trim());
+    if (currentDone.support2 && currentResult.support2Raw)
+      completedRaw.push(currentResult.support2Raw.trim());
 
     if (completedRaw.length === 0) return;
 
@@ -200,13 +210,74 @@ export default function App() {
       localStorage.setItem("reset3_cycles", JSON.stringify(nextCycles));
     }
 
-    // Generate next set
+    // Generate next set (v2 local generator)
     handleGenerate();
   };
 
-  // ---------- generator ----------
+  // ---------- v3: backend call (updates UI) ----------
+  const callBackendGenerate = async () => {
+    try {
+      const rawLines = Array.from(
+        new Set(input.split("\n").map((s) => s.trim()).filter(Boolean))
+      );
+
+      if (rawLines.length === 0) {
+        alert("Brain dump is empty. Add at least 3 lines.");
+        return;
+      }
+
+      const response = await fetch("http://localhost:3001/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brainDump: rawLines.map((t) => ({ text: t })),
+          minutes,
+          quickWinMode,
+          weekly,
+        }),
+      });
+
+      const data = await response.json();
+
+      const newResult = {
+        primary: data?.primary?.text || "Pick one meaningful win.",
+        primaryRaw: data?.primary?.text || "",
+        primaryReason:
+          data?.primary?.reason || reasonFor(data?.primary?.text),
+        primaryAvoidance: isAvoidance(data?.primary?.text),
+
+        support1: data?.support?.[0]?.text || "Clear one blocker.",
+        support1Raw: data?.support?.[0]?.text || "",
+        support1Reason:
+          data?.support?.[0]?.reason || reasonFor(data?.support?.[0]?.text),
+        support1Avoidance: isAvoidance(data?.support?.[0]?.text),
+
+        support2: data?.support?.[1]?.text || "Do one quick cleanup.",
+        support2Raw: data?.support?.[1]?.text || "",
+        support2Reason:
+          data?.support?.[1]?.reason || reasonFor(data?.support?.[1]?.text),
+        support2Avoidance: isAvoidance(data?.support?.[1]?.text),
+      };
+
+      setResult(newResult);
+      localStorage.setItem("reset3_result", JSON.stringify(newResult));
+
+      const nextDaily = { ...dailyResults, [todayKey]: newResult };
+      setDailyResults(nextDaily);
+      localStorage.setItem("reset3_daily_results", JSON.stringify(nextDaily));
+
+      setDone({ primary: false, support1: false, support2: false });
+    } catch (err) {
+      console.error("Backend call failed:", err);
+      alert("Backend call failed. Check server terminal + browser console.");
+    }
+  };
+
+  // ---------- generator (v2 local) ----------
   const handleGenerate = () => {
-    const raw = Array.from(new Set(input.split("\n").map((s) => s.trim()).filter(Boolean)));
+    const raw = Array.from(
+      new Set(input.split("\n").map((s) => s.trim()).filter(Boolean))
+    );
 
     if (raw.length === 0) {
       alert("Brain dump is empty. Add at least 3 lines.");
@@ -215,10 +286,10 @@ export default function App() {
 
     const parsed = raw.map((t) => {
       const m =
-        t.match(/\((\d+)\s*m\)/i) ||      // (20m)
-        t.match(/\((\d+)\)/) ||          // (20)
-        t.match(/\b(\d+)\s*m\b/i) ||     // 20m
-        t.match(/-\s*(\d+)\s*m?/i);      // - 20m OR - 20
+        t.match(/\((\d+)\s*m\)/i) || // (20m)
+        t.match(/\((\d+)\)/) || // (20)
+        t.match(/\b(\d+)\s*m\b/i) || // 20m
+        t.match(/-\s*(\d+)\s*m?/i); // - 20m OR - 20
 
       const mins = m ? Number(m[1]) : null;
 
@@ -236,7 +307,9 @@ export default function App() {
     const hadAnyTimed = parsed.some((x) => x.mins != null);
     const hasAnyTimedThatFits = pool.some((x) => x.mins != null);
     if (hadAnyTimed && !hasAnyTimedThatFits) {
-      alert("No timed tasks fit your max minutes. Increase minutes or add a smaller task.");
+      alert(
+        "No timed tasks fit your max minutes. Increase minutes or add a smaller task."
+      );
       return;
     }
 
@@ -249,10 +322,14 @@ export default function App() {
       const text = normalize(x.clean);
       let score = 0;
 
-      if (["dog", "child", "kid", "appointment"].some((k) => text.includes(k))) score += 5;
-      if (["pay", "bill", "rent", "tax", "invoice"].some((k) => text.includes(k))) score += 4;
-      if (["business", "client", "sell"].some((k) => text.includes(k))) score += 3;
-      if (["story", "game", "youtube", "scroll"].some((k) => text.includes(k))) score -= 3;
+      if (["dog", "child", "kid", "appointment"].some((k) => text.includes(k)))
+        score += 5;
+      if (["pay", "bill", "rent", "tax", "invoice"].some((k) => text.includes(k)))
+        score += 4;
+      if (["business", "client", "sell"].some((k) => text.includes(k)))
+        score += 3;
+      if (["story", "game", "youtube", "scroll"].some((k) => text.includes(k)))
+        score -= 3;
 
       const aligned =
         (w1Phrases.length && w1Phrases.some((p) => text.includes(p))) ||
@@ -273,8 +350,10 @@ export default function App() {
 
     const sorted = [...pool].sort((a, b) => scoreTask(b) - scoreTask(a));
 
-    const hasPrepTask = (text) => ["find", "prepare", "draft", "write", "create"].some((k) => text.includes(k));
-    const hasActionTask = (text) => ["call", "send", "submit", "email"].some((k) => text.includes(k));
+    const hasPrepTask = (text) =>
+      ["find", "prepare", "draft", "write", "create"].some((k) => text.includes(k));
+    const hasActionTask = (text) =>
+      ["call", "send", "submit", "email"].some((k) => text.includes(k));
 
     sorted.sort((a, b) => {
       const aText = normalize(a.clean);
@@ -332,7 +411,8 @@ export default function App() {
   // ---------- simple styles ----------
   const page = {
     minHeight: "100vh",
-    background: "radial-gradient(900px 500px at 20% 10%, rgba(70,120,255,0.18), transparent 60%), radial-gradient(800px 450px at 80% 0%, rgba(0,220,180,0.14), transparent 55%), #0b1020",
+    background:
+      "radial-gradient(900px 500px at 20% 10%, rgba(70,120,255,0.18), transparent 60%), radial-gradient(800px 450px at 80% 0%, rgba(0,220,180,0.14), transparent 55%), #0b1020",
     color: "#e9ecff",
     padding: 24,
   };
@@ -383,10 +463,21 @@ export default function App() {
   return (
     <div style={page}>
       <div style={card}>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
           <div>
-            <h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0.5 }}>Reset 3</h1>
-            <p style={{ marginTop: 6, opacity: 0.85 }}>Unload everything. We’ll decide what matters.</p>
+            <h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0.5 }}>
+              Reset 3
+            </h1>
+            <p style={{ marginTop: 6, opacity: 0.85 }}>
+              Unload everything. We’ll decide what matters.
+            </p>
           </div>
           <div style={{ textAlign: "right", opacity: 0.9 }}>
             <div style={{ fontSize: 12, opacity: 0.8 }}>Today</div>
@@ -422,16 +513,34 @@ export default function App() {
             style={inputStyle}
           />
 
-          <button onClick={() => localStorage.setItem("reset3_weekly", JSON.stringify(weekly))} style={btn("ghost")}>
+          <button
+            onClick={() =>
+              localStorage.setItem("reset3_weekly", JSON.stringify(weekly))
+            }
+            style={btn("ghost")}
+          >
             Save Weekly Outcomes
           </button>
 
           <div style={{ marginTop: 12, opacity: 0.9 }}>
             <b>This week so far (auto):</b>
-            <div>• {weekly.w1 || "(empty)"} {hit1 === true ? "✅" : hit1 === false ? "—" : ""}</div>
-            <div>• {weekly.w2 || "(empty)"} {hit2 === true ? "✅" : hit2 === false ? "—" : ""}</div>
-            <div>• {weekly.w3 || "(empty)"} {hit3 === true ? "✅" : hit3 === false ? "—" : ""}</div>
-            {allSet && <div style={{ marginTop: 8 }}><b>{winSoFar ? "WIN (so far)" : "Not yet"}</b></div>}
+            <div>
+              • {weekly.w1 || "(empty)"}{" "}
+              {hit1 === true ? "✅" : hit1 === false ? "—" : ""}
+            </div>
+            <div>
+              • {weekly.w2 || "(empty)"}{" "}
+              {hit2 === true ? "✅" : hit2 === false ? "—" : ""}
+            </div>
+            <div>
+              • {weekly.w3 || "(empty)"}{" "}
+              {hit3 === true ? "✅" : hit3 === false ? "—" : ""}
+            </div>
+            {allSet && (
+              <div style={{ marginTop: 8 }}>
+                <b>{winSoFar ? "WIN (so far)" : "Not yet"}</b>
+              </div>
+            )}
           </div>
         </div>
 
@@ -471,12 +580,19 @@ export default function App() {
             style={{ ...inputStyle, height: 160 }}
           />
 
-          <button
-            onClick={completeCycleAndGenerateNext}
-            style={btn("primary")}
-          >
-            {result ? (done.primary ? "Generate Next Set" : "Primary First → Then Next Set") : "Generate My 3"}
-          </button>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={completeCycleAndGenerateNext} style={btn("primary")}>
+              {result
+                ? done.primary
+                  ? "Generate Next Set"
+                  : "Primary First → Then Next Set"
+                : "Generate My 3"}
+            </button>
+
+            <button onClick={callBackendGenerate} style={btn("ghost")}>
+              Test Backend (v3)
+            </button>
+          </div>
 
           {result && !done.primary && (
             <div style={{ marginTop: 10, opacity: 0.85, fontSize: 13 }}>
@@ -500,7 +616,9 @@ export default function App() {
                 {result.primary}
                 {result.primaryAvoidance && <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>}
               </label>
-              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>{result.primaryReason}</div>
+              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
+                {result.primaryReason}
+              </div>
             </div>
 
             <h4 style={{ marginBottom: 10 }}>Support Moves</h4>
@@ -513,7 +631,9 @@ export default function App() {
               />{" "}
               {result.support1}
               {result.support1Avoidance && <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>}
-              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>{result.support1Reason}</div>
+              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
+                {result.support1Reason}
+              </div>
             </label>
 
             <label style={{ display: "block" }}>
@@ -524,7 +644,9 @@ export default function App() {
               />{" "}
               {result.support2}
               {result.support2Avoidance && <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>}
-              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>{result.support2Reason}</div>
+              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
+                {result.support2Reason}
+              </div>
             </label>
 
             <div style={{ marginTop: 16, opacity: 0.85, fontSize: 13 }}>
