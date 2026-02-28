@@ -2,6 +2,9 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 
+console.log("OPENAI KEY LOADED:", !!process.env.OPENAI_API_KEY);
+console.log("OPENAI KEY PREFIX:", (process.env.OPENAI_API_KEY || "").slice(0, 7));
+
 const OpenAI = require("openai");
 
 // ---- Config ----

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import "./App.css";
+import HistoryCalendar from "./components/HistoryCalendar.jsx";
 
 export default function App() {
   // ---------- date helpers ----------
@@ -21,6 +22,17 @@ export default function App() {
     }
     return keys;
   })();
+
+  // ---------- calendar/history helper ----------
+  const lastNKeys = (n = 14) => {
+    const keys = [];
+    for (let i = 0; i < n; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      keys.push(dateKey(d));
+    }
+    return keys;
+  };
 
   // ---------- text helpers ----------
   const normalize = (s) =>
@@ -84,7 +96,6 @@ export default function App() {
   };
 
   // ---------- state ----------
-
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState("");
 
@@ -121,8 +132,8 @@ export default function App() {
   });
 
   useEffect(() => {
-  localStorage.setItem("reset3_weekly", JSON.stringify(weekly));
-}, [weekly]);
+    localStorage.setItem("reset3_weekly", JSON.stringify(weekly));
+  }, [weekly]);
 
   const [result, setResult] = useState(() => {
     const saved = localStorage.getItem("reset3_result");
@@ -200,126 +211,92 @@ export default function App() {
     setInput(kept.join("\n"));
   };
 
-  // ---------- cycle complete (multi-cycle/day) ----------
-  const completeCycleAndGenerateNext = () => {
-    // If there is an active set, enforce Primary-first rule
-    if (result && !done.primary) {
-      alert("Primary must be checked before generating the next set.");
+  // ---------- v3/v4: backend call (updates UI) ----------
+  // Uses Vite env var in prod: VITE_API_URL=https://your-backend
+  const API_URL =
+    (import.meta.env.VITE_API_URL || "").trim() || "http://localhost:3001";
+
+  const callBackendGenerate = async () => {
+    setApiError("");
+
+    const rawLines = Array.from(
+      new Set(input.split("\n").map((s) => s.trim()).filter(Boolean))
+    );
+
+    if (rawLines.length === 0) {
+      alert("Brain dump is empty. Add at least 3 lines.");
       return;
     }
 
-    // If a set exists and primary is done, count a cycle + prune completed
-    if (result && done.primary) {
-      removeCompletedFromDump(result, done);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
 
-      const currentCount = cyclesByDay[todayKey] || 0;
-      const nextCycles = { ...cyclesByDay, [todayKey]: currentCount + 1 };
-      setCyclesByDay(nextCycles);
-      localStorage.setItem("reset3_cycles", JSON.stringify(nextCycles));
+    try {
+      setIsLoading(true);
+
+      const response = await fetch(`${API_URL}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          brainDump: rawLines.map((t) => ({ text: t })),
+          minutes,
+          quickWinMode,
+          weekly,
+        }),
+      });
+
+      if (!response.ok) {
+        const msg = await response.text();
+        throw new Error(msg || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      const newResult = {
+        primary: data?.primary?.text || "Pick one meaningful win.",
+        primaryRaw: data?.primary?.text || "",
+        primaryReason: data?.primary?.reason || reasonFor(data?.primary?.text),
+        primaryAvoidance: isAvoidance(data?.primary?.text),
+
+        support1: data?.support?.[0]?.text || "Clear one blocker.",
+        support1Raw: data?.support?.[0]?.text || "",
+        support1Reason:
+          data?.support?.[0]?.reason || reasonFor(data?.support?.[0]?.text),
+        support1Avoidance: isAvoidance(data?.support?.[0]?.text),
+
+        support2: data?.support?.[1]?.text || "Do one quick cleanup.",
+        support2Raw: data?.support?.[1]?.text || "",
+        support2Reason:
+          data?.support?.[1]?.reason || reasonFor(data?.support?.[1]?.text),
+        support2Avoidance: isAvoidance(data?.support?.[1]?.text),
+      };
+
+      setResult(newResult);
+      setApiError("");
+      localStorage.setItem("reset3_result", JSON.stringify(newResult));
+
+      const nextDaily = { ...dailyResults, [todayKey]: newResult };
+      setDailyResults(nextDaily);
+      localStorage.setItem("reset3_daily_results", JSON.stringify(nextDaily));
+
+      setDone({ primary: false, support1: false, support2: false });
+    } catch (err) {
+      const isAbort =
+        err?.name === "AbortError" ||
+        String(err?.message || "").toLowerCase().includes("aborted");
+
+      const msg = isAbort
+        ? "Backend request timed out (60s). Try again."
+        : `Backend error: ${err?.message || "Unknown error"}`;
+
+      setApiError(`${msg} (Using local fallback.)`);
+      handleGenerate();
+    } finally {
+      clearTimeout(timeout);
+      setIsLoading(false);
     }
-
-    // Generate next set (v2 local generator)
-    handleGenerate();
   };
-  
-  // ---------- v3: backend call (updates UI) ----------
-const API_URL = import.meta.env.VITE_API_URL;
-
-const callBackendGenerate = async () => {
-  setApiError("");
-
-  const rawLines = Array.from(
-    new Set(input.split("\n").map((s) => s.trim()).filter(Boolean))
-  );
-
-  if (rawLines.length === 0) {
-    alert("Brain dump is empty. Add at least 3 lines.");
-    return;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
-
-  try {
-    setIsLoading(true);
-
-console.log("CALLING BACKEND:", `${API_URL}/api/generate`);
-
-    const response = await fetch(`${API_URL}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-
-body: JSON.stringify({
-  brainDump: rawLines.map((t) => ({ text: t })),
-  minutes,
-  quickWinMode,
-  weekly,
-}),
-
-    });
-
-    if (!response.ok) {
-      const msg = await response.text();
-      throw new Error(msg || `HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    const newResult = {
-      primary: data?.primary?.text || "Pick one meaningful win.",
-      primaryRaw: data?.primary?.text || "",
-      primaryReason: data?.primary?.reason || reasonFor(data?.primary?.text),
-      primaryAvoidance: isAvoidance(data?.primary?.text),
-
-      support1: data?.support?.[0]?.text || "Clear one blocker.",
-      support1Raw: data?.support?.[0]?.text || "",
-      support1Reason:
-        data?.support?.[0]?.reason || reasonFor(data?.support?.[0]?.text),
-      support1Avoidance: isAvoidance(data?.support?.[0]?.text),
-
-      support2: data?.support?.[1]?.text || "Do one quick cleanup.",
-      support2Raw: data?.support?.[1]?.text || "",
-      support2Reason:
-        data?.support?.[1]?.reason || reasonFor(data?.support?.[1]?.text),
-      support2Avoidance: isAvoidance(data?.support?.[1]?.text),
-    };
-
-    setResult(newResult);
-    setApiError(""); // clear any previous backend error
-    localStorage.setItem("reset3_result", JSON.stringify(newResult));
-
-    const nextDaily = { ...dailyResults, [todayKey]: newResult };
-    setDailyResults(nextDaily);
-    localStorage.setItem("reset3_daily_results", JSON.stringify(nextDaily));
-
-    setDone({ primary: false, support1: false, support2: false });
-
-} catch (err) {
-  console.error("Backend call failed:", err);
-
-  // Make the error human-readable
-  const isAbort =
-    err?.name === "AbortError" ||
-    String(err?.message || "").toLowerCase().includes("aborted");
-
-  const msg = isAbort
-    ? "Backend request timed out (60s). Try again."
-    : `Backend error: ${err?.message || "Unknown error"}`;
-
-  // Show the real error
-  setApiError(msg);
-
-  // Optional fallback (v2). Keep it, but make it honest.
-  setApiError((prev) => `${prev} (Using local fallback.)`);
-  handleGenerate();
-}
-
-finally {
-    clearTimeout(timeout);
-    setIsLoading(false);
-  }
-};
 
   // ---------- generator (v2 local) ----------
   const handleGenerate = () => {
@@ -334,10 +311,10 @@ finally {
 
     const parsed = raw.map((t) => {
       const m =
-        t.match(/\((\d+)\s*m\)/i) || // (20m)
-        t.match(/\((\d+)\)/) || // (20)
-        t.match(/\b(\d+)\s*m\b/i) || // 20m
-        t.match(/-\s*(\d+)\s*m?/i); // - 20m OR - 20
+        t.match(/\((\d+)\s*m\)/i) ||
+        t.match(/\((\d+)\)/) ||
+        t.match(/\b(\d+)\s*m\b/i) ||
+        t.match(/-\s*(\d+)\s*m?/i);
 
       const mins = m ? Number(m[1]) : null;
 
@@ -386,7 +363,6 @@ finally {
 
       if (aligned) score += 4;
 
-      // v2: quick win boost
       if (quickWinMode) {
         if (x.mins != null && x.mins <= 20) score += 3;
         if (x.mins == null) score += 1;
@@ -456,6 +432,20 @@ finally {
     setDone({ primary: false, support1: false, support2: false });
   };
 
+  // ---------- build calendar days for HistoryCalendar ----------
+  const calendarDays = lastNKeys(14).map((k) => {
+    const day = dailyResults[k];
+    const cycles = cyclesByDay[k] || 0;
+    const status = k in eod ? (eod[k] ? "WIN" : "INCOMPLETE") : "";
+
+    return {
+      date: k,
+      primary: day?.primary || "",
+      cycles,
+      status,
+    };
+  });
+
   // ---------- simple styles ----------
   const page = {
     minHeight: "100vh",
@@ -510,334 +500,377 @@ finally {
   // ---------- UI ----------
   return (
     <div style={page}>
-      <div style={card}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "baseline",
-            justifyContent: "space-between",
-            gap: 12,
-          }}
-        >
-          <div>
-            <h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0.5 }}>
-              Reset 3
-            </h1>
-
-            <p style={{ marginTop: 6, opacity: 0.85 }}>
-              Unload everything. We’ll decide what matters.
-            </p>
-          </div>
-          <div style={{ textAlign: "right", opacity: 0.9 }}>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>Today</div>
-            <div style={{ fontWeight: 700 }}>{todayKey}</div>
-            <div style={{ marginTop: 6, fontSize: 13 }}>
-              Cycles today: <b>{cyclesByDay[todayKey] || 0}</b>
+      <div className="appContainer">
+        <div style={card}>
+          {/* v4: branded header */}
+          <div className="app-header">
+            <div className="brand">
+              <span className="brand-accent">RESET</span>3
             </div>
           </div>
-        </div>
 
-        <div style={section}>
-          <h3 style={{ marginTop: 0 }}>Weekly Reset</h3>
-          <p style={{ marginTop: 6 }}>
-            <b>What are the 3 outcomes that make this week a win?</b>
-          </p>
-
-          <input
-            value={weekly.w1}
-            onChange={(e) => setWeekly((w) => ({ ...w, w1: e.target.value }))}
-            placeholder="Weekly outcome 1"
-            style={inputStyle}
-          />
-          <input
-            value={weekly.w2}
-            onChange={(e) => setWeekly((w) => ({ ...w, w2: e.target.value }))}
-            placeholder="Weekly outcome 2"
-            style={inputStyle}
-          />
-          <input
-            value={weekly.w3}
-            onChange={(e) => setWeekly((w) => ({ ...w, w3: e.target.value }))}
-            placeholder="Weekly outcome 3"
-            style={inputStyle}
-          />
-
-          <button
-            onClick={() =>
-              localStorage.setItem("reset3_weekly", JSON.stringify(weekly))
-            }
-            style={btn("ghost")}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: 12,
+            }}
           >
-            Save Weekly Outcomes
-          </button>
+            <div>
+              <h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0.5 }}>
+                Reset 3
+              </h1>
 
-          <div style={{ marginTop: 12, opacity: 0.9 }}>
-            <b>This week so far (auto):</b>
-            <div>
-              • {weekly.w1 || "(empty)"}{" "}
-              {hit1 === true ? "✅" : hit1 === false ? "—" : ""}
+              <p style={{ marginTop: 6, opacity: 0.85 }}>
+                Unload everything. We’ll decide what matters.
+              </p>
             </div>
-            <div>
-              • {weekly.w2 || "(empty)"}{" "}
-              {hit2 === true ? "✅" : hit2 === false ? "—" : ""}
-            </div>
-            <div>
-              • {weekly.w3 || "(empty)"}{" "}
-              {hit3 === true ? "✅" : hit3 === false ? "—" : ""}
-            </div>
-            {allSet && (
-              <div style={{ marginTop: 8 }}>
-                <b>{winSoFar ? "WIN (so far)" : "Not yet"}</b>
+
+            <div style={{ textAlign: "right", opacity: 0.9 }}>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>Today</div>
+              <div style={{ fontWeight: 700 }}>{todayKey}</div>
+              <div style={{ marginTop: 6, fontSize: 13 }}>
+                Cycles today: <b>{cyclesByDay[todayKey] || 0}</b>
               </div>
-            )}
-          </div>
-        </div>
-
-        <div style={section}>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={{ display: "block", marginBottom: 6, opacity: 0.9 }}>
-                Max minutes (filters tasks with times)
-              </label>
-              <input
-                type="number"
-                value={minutes}
-                onChange={(e) => setMinutes(Number(e.target.value))}
-                style={{ ...inputStyle, marginBottom: 0 }}
-                placeholder="e.g. 60"
-              />
             </div>
-
-            <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 22, opacity: 0.95 }}>
-              <input
-                type="checkbox"
-                checked={quickWinMode}
-                onChange={(e) => setQuickWinMode(e.target.checked)}
-              />
-              Prefer quick wins (boost ≤ 20m)
-            </label>
           </div>
 
-          <p style={{ marginTop: 12, marginBottom: 8, opacity: 0.8 }}>
-            Brain dump is saved automatically.
-          </p>
-
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Brain dump (one per line). Times: Walk dog (20m) OR Walk dog - 20m"
-            style={{ ...inputStyle, height: 160 }}
-          />
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-  <button
-    onClick={() => {
-      // Enforce Primary-first rule
-      if (result && !done.primary) {
-        alert("Primary must be checked before generating the next set.");
-        return;
-      }
-
-      // If Primary is done, count cycle + prune completed
-      if (result && done.primary) {
-        removeCompletedFromDump(result, done);
-
-        const currentCount = cyclesByDay[todayKey] || 0;
-        const nextCycles = { ...cyclesByDay, [todayKey]: currentCount + 1 };
-        setCyclesByDay(nextCycles);
-        localStorage.setItem("reset3_cycles", JSON.stringify(nextCycles));
-      }
-
-      // Backend generator (v3), with v2 fallback inside
-      callBackendGenerate();
-    }}
-    style={btn("primary")}
-    disabled={isLoading}
-  >
-    {isLoading
-      ? "Thinking..."
-      : result
-        ? done.primary
-          ? "Generate Next Set"
-          : "Primary First → Then Next Set"
-        : "Generate My 3"}
-  </button>
-
-  <button
-    onClick={callBackendGenerate}
-    style={btn("ghost")}
-    disabled={isLoading}
-  >
-    Test Backend
-  </button>
-</div>
-
-{apiError && (
-  <div style={{ marginTop: 10, opacity: 0.9, fontSize: 13 }}>
-    ⚠ {apiError}
-  </div>
-)}
-
-          {result && !done.primary && (
-            <div style={{ marginTop: 10, opacity: 0.85, fontSize: 13 }}>
-              Rule: You can run multiple cycles per day — but you must finish the Primary first.
-            </div>
-          )}
-        </div>
-
-        {result && (
           <div style={section}>
-            <h2 style={{ marginTop: 0 }}>Today’s 3</h2>
+            <h3 style={{ marginTop: 0 }}>Weekly Reset</h3>
+            <p style={{ marginTop: 6 }}>
+              <b>What are the 3 outcomes that make this week a win?</b>
+            </p>
 
-            <div style={{ marginBottom: 16 }}>
-              <h3 style={{ marginBottom: 8 }}>🔥 Primary Move</h3>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={done.primary}
-                  onChange={(e) => setDone((d) => ({ ...d, primary: e.target.checked }))}
-                />{" "}
-                {result.primary}
-                {result.primaryAvoidance && <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>}
-              </label>
-              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
-                {result.primaryReason}
+            <input
+              value={weekly.w1}
+              onChange={(e) => setWeekly((w) => ({ ...w, w1: e.target.value }))}
+              placeholder="Weekly outcome 1"
+              style={inputStyle}
+            />
+            <input
+              value={weekly.w2}
+              onChange={(e) => setWeekly((w) => ({ ...w, w2: e.target.value }))}
+              placeholder="Weekly outcome 2"
+              style={inputStyle}
+            />
+            <input
+              value={weekly.w3}
+              onChange={(e) => setWeekly((w) => ({ ...w, w3: e.target.value }))}
+              placeholder="Weekly outcome 3"
+              style={inputStyle}
+            />
+
+            <button
+              onClick={() =>
+                localStorage.setItem("reset3_weekly", JSON.stringify(weekly))
+              }
+              style={btn("ghost")}
+            >
+              Save Weekly Outcomes
+            </button>
+
+            <div style={{ marginTop: 12, opacity: 0.9 }}>
+              <b>This week so far (auto):</b>
+              <div>
+                • {weekly.w1 || "(empty)"}{" "}
+                {hit1 === true ? "✅" : hit1 === false ? "—" : ""}
               </div>
-            </div>
-
-            <h4 style={{ marginBottom: 10 }}>Support Moves</h4>
-
-            <label style={{ display: "block", marginBottom: 10 }}>
-              <input
-                type="checkbox"
-                checked={done.support1}
-                onChange={(e) => setDone((d) => ({ ...d, support1: e.target.checked }))}
-              />{" "}
-              {result.support1}
-              {result.support1Avoidance && <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>}
-              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
-                {result.support1Reason}
+              <div>
+                • {weekly.w2 || "(empty)"}{" "}
+                {hit2 === true ? "✅" : hit2 === false ? "—" : ""}
               </div>
-            </label>
-
-            <label style={{ display: "block" }}>
-              <input
-                type="checkbox"
-                checked={done.support2}
-                onChange={(e) => setDone((d) => ({ ...d, support2: e.target.checked }))}
-              />{" "}
-              {result.support2}
-              {result.support2Avoidance && <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>}
-              <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
-                {result.support2Reason}
+              <div>
+                • {weekly.w3 || "(empty)"}{" "}
+                {hit3 === true ? "✅" : hit3 === false ? "—" : ""}
               </div>
-            </label>
-
-            <div style={{ marginTop: 16, opacity: 0.85, fontSize: 13 }}>
-              Tip: Check items as you finish them. When Primary is checked, you can run another cycle immediately.
-            </div>
-          </div>
-        )}
-
-        {/* Keep EOD logging section (optional, doesn’t gate cycles anymore) */}
-        <div style={{ ...section, opacity: 0.95 }}>
-          <h3 style={{ marginTop: 0 }}>End of day (optional log)</h3>
-          <p style={{ marginTop: 6 }}>Did you complete at least one Primary today?</p>
-
-          <button
-            onClick={() => {
-              const next = { ...eod, [todayKey]: true };
-              setEod(next);
-              localStorage.setItem("reset3_eod", JSON.stringify(next));
-
-              const nextWhy = { ...eodWhy };
-              delete nextWhy[todayKey];
-              setEodWhy(nextWhy);
-              localStorage.setItem("reset3_eod_why", JSON.stringify(nextWhy));
-            }}
-            style={{ ...btn("ghost"), marginRight: 8 }}
-          >
-            Yes
-          </button>
-
-          <button
-            onClick={() => {
-              const next = { ...eod, [todayKey]: false };
-              setEod(next);
-              localStorage.setItem("reset3_eod", JSON.stringify(next));
-            }}
-            style={btn("ghost")}
-          >
-            No
-          </button>
-
-          <button
-            onClick={() => {
-              const next = { ...eod };
-              delete next[todayKey];
-              setEod(next);
-              localStorage.setItem("reset3_eod", JSON.stringify(next));
-
-              const nextWhy = { ...eodWhy };
-              delete nextWhy[todayKey];
-              setEodWhy(nextWhy);
-              localStorage.setItem("reset3_eod_why", JSON.stringify(nextWhy));
-            }}
-            style={{ ...btn("ghost"), marginLeft: 8 }}
-          >
-            Clear
-          </button>
-
-          {todayKey in eod && (
-            <div style={{ marginTop: 10 }}>
-              {eod[todayKey] ? (
-                <p>Good. You did the thing that matters.</p>
-              ) : (
-                <div>
-                  <p style={{ marginBottom: 8 }}>Incomplete. Why?</p>
-
-                  <button
-                    onClick={() => {
-                      const next = { ...eodWhy, [todayKey]: "Blocked" };
-                      setEodWhy(next);
-                      localStorage.setItem("reset3_eod_why", JSON.stringify(next));
-                    }}
-                    style={{ ...btn("ghost"), marginRight: 6 }}
-                  >
-                    Blocked
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      const next = { ...eodWhy, [todayKey]: "No longer relevant" };
-                      setEodWhy(next);
-                      localStorage.setItem("reset3_eod_why", JSON.stringify(next));
-                    }}
-                    style={{ ...btn("ghost"), marginRight: 6 }}
-                  >
-                    No longer relevant
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      const next = { ...eodWhy, [todayKey]: "Avoided" };
-                      setEodWhy(next);
-                      localStorage.setItem("reset3_eod_why", JSON.stringify(next));
-                    }}
-                    style={btn("ghost")}
-                  >
-                    Avoided
-                  </button>
-
-                  {eodWhy[todayKey] && (
-                    <p style={{ marginTop: 10 }}>
-                      Logged: <b>{eodWhy[todayKey]}</b>
-                    </p>
-                  )}
+              {allSet && (
+                <div style={{ marginTop: 8 }}>
+                  <b>{winSoFar ? "WIN (so far)" : "Not yet"}</b>
                 </div>
               )}
             </div>
+          </div>
+
+          <div style={section}>
+            <div className="controlsRow">
+              <div style={{ minWidth: 220 }}>
+                <label
+                  style={{ display: "block", marginBottom: 6, opacity: 0.9 }}
+                >
+                  Max minutes (filters tasks with times)
+                </label>
+                <input
+                  type="number"
+                  value={minutes}
+                  onChange={(e) => setMinutes(Number(e.target.value))}
+                  style={{ ...inputStyle, marginBottom: 0 }}
+                  placeholder="e.g. 60"
+                />
+              </div>
+
+              <label className="quickWinLabel">
+                <input
+                  type="checkbox"
+                  checked={quickWinMode}
+                  onChange={(e) => setQuickWinMode(e.target.checked)}
+                />
+                Prefer quick wins (boost ≤ 20m)
+              </label>
+            </div>
+
+            <p style={{ marginTop: 12, marginBottom: 8, opacity: 0.8 }}>
+              Brain dump is saved automatically.
+            </p>
+
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Brain dump (one per line). Times: Walk dog (20m) OR Walk dog - 20m"
+              style={{ ...inputStyle, height: 160 }}
+            />
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button
+                onClick={() => {
+                  if (result && !done.primary) {
+                    alert(
+                      "Primary must be checked before generating the next set."
+                    );
+                    return;
+                  }
+
+                  if (result && done.primary) {
+                    removeCompletedFromDump(result, done);
+
+                    const currentCount = cyclesByDay[todayKey] || 0;
+                    const nextCycles = {
+                      ...cyclesByDay,
+                      [todayKey]: currentCount + 1,
+                    };
+                    setCyclesByDay(nextCycles);
+                    localStorage.setItem(
+                      "reset3_cycles",
+                      JSON.stringify(nextCycles)
+                    );
+                  }
+
+                  callBackendGenerate();
+                }}
+                style={btn("primary")}
+                disabled={isLoading}
+              >
+                {isLoading
+                  ? "Thinking..."
+                  : result
+                  ? done.primary
+                    ? "Generate Next Set"
+                    : "Primary First → Then Next Set"
+                  : "Generate My 3"}
+              </button>
+            </div>
+
+            {apiError && (
+              <div style={{ marginTop: 10, opacity: 0.9, fontSize: 13 }}>
+                ⚠ {apiError}
+              </div>
+            )}
+
+            {result && !done.primary && (
+              <div style={{ marginTop: 10, opacity: 0.85, fontSize: 13 }}>
+                Rule: You can run multiple cycles per day — but you must finish
+                the Primary first.
+              </div>
+            )}
+          </div>
+
+          {result && (
+            <div style={section}>
+              <h2 style={{ marginTop: 0 }}>Today’s 3</h2>
+
+              <div style={{ marginBottom: 16 }}>
+                <h3 style={{ marginBottom: 8 }}>🔥 Primary Move</h3>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={done.primary}
+                    onChange={(e) =>
+                      setDone((d) => ({ ...d, primary: e.target.checked }))
+                    }
+                  />{" "}
+                  {result.primary}
+                  {result.primaryAvoidance && (
+                    <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>
+                  )}
+                </label>
+                <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
+                  {result.primaryReason}
+                </div>
+              </div>
+
+              <h4 style={{ marginBottom: 10 }}>Support Moves</h4>
+
+              <label style={{ display: "block", marginBottom: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={done.support1}
+                  onChange={(e) =>
+                    setDone((d) => ({ ...d, support1: e.target.checked }))
+                  }
+                />{" "}
+                {result.support1}
+                {result.support1Avoidance && (
+                  <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>
+                )}
+                <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
+                  {result.support1Reason}
+                </div>
+              </label>
+
+              <label style={{ display: "block" }}>
+                <input
+                  type="checkbox"
+                  checked={done.support2}
+                  onChange={(e) =>
+                    setDone((d) => ({ ...d, support2: e.target.checked }))
+                  }
+                />{" "}
+                {result.support2}
+                {result.support2Avoidance && (
+                  <span style={{ marginLeft: 8 }}>⚠ Avoidance</span>
+                )}
+                <div style={{ opacity: 0.85, marginLeft: 22, marginTop: 4 }}>
+                  {result.support2Reason}
+                </div>
+              </label>
+
+              <div style={{ marginTop: 16, opacity: 0.85, fontSize: 13 }}>
+                Tip: Check items as you finish them. When Primary is checked,
+                you can run another cycle immediately.
+              </div>
+            </div>
           )}
+
+          {/* HISTORY */}
+          <div style={section}>
+            <h3 style={{ marginTop: 0 }}>History (last 14 days)</h3>
+            <HistoryCalendar days={calendarDays} />
+          </div>
+
+          {/* End of day (optional log) */}
+          <div style={{ ...section, opacity: 0.95 }}>
+            <h3 style={{ marginTop: 0 }}>End of day (optional log)</h3>
+            <p style={{ marginTop: 6 }}>
+              Did you complete at least one Primary today?
+            </p>
+
+            <button
+              onClick={() => {
+                const next = { ...eod, [todayKey]: true };
+                setEod(next);
+                localStorage.setItem("reset3_eod", JSON.stringify(next));
+
+                const nextWhy = { ...eodWhy };
+                delete nextWhy[todayKey];
+                setEodWhy(nextWhy);
+                localStorage.setItem("reset3_eod_why", JSON.stringify(nextWhy));
+              }}
+              style={{ ...btn("ghost"), marginRight: 8 }}
+            >
+              Yes
+            </button>
+
+            <button
+              onClick={() => {
+                const next = { ...eod, [todayKey]: false };
+                setEod(next);
+                localStorage.setItem("reset3_eod", JSON.stringify(next));
+              }}
+              style={btn("ghost")}
+            >
+              No
+            </button>
+
+            <button
+              onClick={() => {
+                const next = { ...eod };
+                delete next[todayKey];
+                setEod(next);
+                localStorage.setItem("reset3_eod", JSON.stringify(next));
+
+                const nextWhy = { ...eodWhy };
+                delete nextWhy[todayKey];
+                setEodWhy(nextWhy);
+                localStorage.setItem("reset3_eod_why", JSON.stringify(nextWhy));
+              }}
+              style={{ ...btn("ghost"), marginLeft: 8 }}
+            >
+              Clear
+            </button>
+
+            {todayKey in eod && (
+              <div style={{ marginTop: 10 }}>
+                {eod[todayKey] ? (
+                  <p>Good. You did the thing that matters.</p>
+                ) : (
+                  <div>
+                    <p style={{ marginBottom: 8 }}>Incomplete. Why?</p>
+
+                    <button
+                      onClick={() => {
+                        const next = { ...eodWhy, [todayKey]: "Blocked" };
+                        setEodWhy(next);
+                        localStorage.setItem(
+                          "reset3_eod_why",
+                          JSON.stringify(next)
+                        );
+                      }}
+                      style={{ ...btn("ghost"), marginRight: 6 }}
+                    >
+                      Blocked
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const next = {
+                          ...eodWhy,
+                          [todayKey]: "No longer relevant",
+                        };
+                        setEodWhy(next);
+                        localStorage.setItem(
+                          "reset3_eod_why",
+                          JSON.stringify(next)
+                        );
+                      }}
+                      style={{ ...btn("ghost"), marginRight: 6 }}
+                    >
+                      No longer relevant
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const next = { ...eodWhy, [todayKey]: "Avoided" };
+                        setEodWhy(next);
+                        localStorage.setItem(
+                          "reset3_eod_why",
+                          JSON.stringify(next)
+                        );
+                      }}
+                      style={btn("ghost")}
+                    >
+                      Avoided
+                    </button>
+
+                    {eodWhy[todayKey] && (
+                      <p style={{ marginTop: 10 }}>
+                        Logged: <b>{eodWhy[todayKey]}</b>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

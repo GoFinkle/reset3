@@ -70,3 +70,160 @@ button:active{
   color: var(--fa-primary);
   text-shadow: 0 0 18px rgba(29,161,255,0.45);
 }
+
+/* v4 controls row: prevents overlap */
+.controlsRow {
+  display: flex;
+  gap: 20px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 560px){
+  .controlsRow{
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}
+
+.quickWinLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  margin-left: 20px;
+}
+
+@media (max-width: 560px) {
+  .quickWinLabel {
+    margin-left: 0;
+  }
+}
+
+.quickWinLabel{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0.95;
+  white-space: nowrap;
+  padding-top: 22px; /* lines it up with the input row label */
+}
+
+.quickWinLabel{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0.95;
+  white-space: nowrap;
+}
+
+/* === History Calendar Grid (v4) === */
+.historyCalendarGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* responsive: keep it readable on smaller screens */
+@media (max-width: 900px) {
+  .historyCalendarGrid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .historyCalendarGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .historyCalendarGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+}
+
+.historyDayCard {
+  position: relative;
+  border: 1px solid rgba(0,170,255,0.18);
+  background: rgba(255,255,255,0.03);
+  border-radius: 12px;
+  padding: 10px 10px 44px;
+
+  /* make them squares */
+  aspect-ratio: 1 / 1;
+  min-height: unset;
+
+  overflow: hidden;
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+.historyDayCard:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+/* === End History Calendar Grid === */
+
+
+.historyDayDate {
+  font-size: 12px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.historyDayStatus {
+
+  /* ...your existing stuff... */
+  color: rgba(255,255,255,0.78);
+
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+
+  padding: 4px 8px;
+  border-radius: 999px;
+
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  opacity: 0.92;
+}
+
+/* status tint */
+.historyDayCard.isWin .historyDayStatus {
+  border-color: rgba(0, 255, 170, 0.25);
+  background: rgba(0, 255, 170, 0.08);
+  color: rgba(190, 255, 230, 0.95);
+}
+
+.historyDayCard.isIncomplete .historyDayStatus {
+  border-color: rgba(255, 120, 120, 0.22);
+  background: rgba(255, 120, 120, 0.07);
+  color: rgba(255, 210, 210, 0.92);
+}
+
+.historyDayPrimary {
+  font-size: 13px;
+  line-height: 1.25;
+  margin-bottom: 10px;
+
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* pin the meta to the bottom-left like a “badge” */
+.historyDayMeta {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+
+  font-size: 12px;
+  opacity: 0.75;
+
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.18);
+}
+
+.appContainer {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+}
